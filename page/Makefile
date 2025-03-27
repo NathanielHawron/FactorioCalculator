@@ -1,6 +1,7 @@
 CXX = emcc
 OUTPUT = browser/imgui.js
 IMGUI_DIR:=../submodule/imgui
+EXPORT = -sEXPORTED_FUNCTIONS=_malloc,_free,_main
 
 SOURCES = src/*
 SOURCES += $(IMGUI_DIR)/backends/imgui_impl_glfw.cpp $(IMGUI_DIR)/backends/imgui_impl_opengl3.cpp
@@ -13,8 +14,8 @@ USE_WASM = -s WASM=1
 
 all: $(SOURCES) $(OUTPUT)
 
-$(OUTPUT): $(SOURCES) 
-	$(CXX)  $(SOURCES) -std=c++11 -o $(OUTPUT) $(LIBS) $(WEBGL_VER) -O2 $(USE_WASM) -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
+$(OUTPUT): $(SOURCES) include/*
+	$(CXX) $(EXPORT) $(SOURCES) -std=c++17 -o $(OUTPUT) $(LIBS) $(WEBGL_VER) -O2 $(USE_WASM) -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 
 clean:
 	rm -f $(OUTPUT)

@@ -21,6 +21,7 @@
     <div class="emscripten_border">
       <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()"></canvas>
     </div>
+    <input id="fileSelection" style="position:absolute;left:0;top:0;" type="file">
 
     <script type='text/javascript'>
       var Module = {
@@ -38,12 +39,32 @@
         })(),
         setStatus: function(text) {},
         totalDependencies: 0,
-        monitorRunDependencies: function(left) {}
+        monitorRunDependencies: function(left) {},
+        memory: new WebAssembly.Memory({initial:10,maximum:100})
       };
+      Module.wasmMemory = Module.memory;
       window.addEventListener('resize', js_resizeCanvas, false);
       function js_resizeCanvas() {
         document.getElementById('canvas').width = window.innerWidth;
         document.getElementById('canvas').height = window.innerHeight;
+      }
+
+      function downloadFile(data, filename){
+        const blob = new Blob([data], {type:"application/octet-stream"});
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+      function uploadFile(cb){
+        const fileInput = document.getElementById("fileSelection");
+        let fr = new FileReader();
+        fr.onload = ()=>{
+          cb(new Uint8Array(fr.result));
+        };
+        fr.readAsArrayBuffer(fileInput.files[0]);
       }
 
     </script>

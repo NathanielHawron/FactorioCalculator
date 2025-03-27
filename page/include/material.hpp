@@ -1,14 +1,16 @@
+#pragma once
 #include "imgui.h"
 
 #include <string>
 
-enum class MaterialType{
-    ITEM,
-    FLUID
-};
 struct Material{
-    char name[30];
-    void render(const char *label){
-        ImGui::InputText(label, this->name,30);
-    }
+    private:
+        static char matLabelBuffer[18];
+        bool showList = false;
+    public:
+        std::size_t index;
+        char name[50];
+        float energy;
+        Material(std::size_t index, const char *name = nullptr, float energy = 0);
+        bool render();
 };

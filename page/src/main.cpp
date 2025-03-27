@@ -1,177 +1,151 @@
-#include <stdio.h>
+#include "main.hpp"
 
-#ifdef __EMSCRIPTEN__
 #include <emscripten.h>
-#endif
-
-#define GLFW_INCLUDE_ES3
-#include <GLES3/gl3.h>
-#include <GLFW/glfw3.h>
-
-#include "imgui.h"
-#include "imgui_impl_glfw.h"
-#include "imgui_impl_opengl3.h"
-#include <iostream>
 
 #include <vector>
-#include <sstream>
+#include <string>
 
-#include "material.hpp"
-#include "machine.hpp"
-#include "recipe.hpp"
-#include "process.hpp"
-#include "system.hpp"
+#include <iostream>
+#include <cstddef>
 
+State state;
+MENU selectedMenu = MENU::MATERIAL;
 
-GLFWwindow* g_window;
-ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
-bool show_demo_window = true;
-bool show_another_window = false;
-int g_width;
-int g_height;
-
-// Function used by c++ to get the size of the html canvas
-EM_JS(int, canvas_get_width, (), {
-  return Module.canvas.width;
+EM_JS(void, JS_downloadFile, (std::byte *ptr, std::size_t length, const char *fileName), {
+  downloadFile(new Uint8Array(Module.HEAPU8.buffer, ptr, length),UTF8ToString(fileName));
+});
+EM_JS(void, JS_uploadFile, (), {
+  uploadFile((res)=>{
+    try{
+      let ptr = Module._malloc(res.length);
+      Module.HEAPU8.set(res, ptr);
+      Module._C_updateState(ptr,res.length);
+      Module._free(ptr);
+    }catch(e){
+      console.error(e);
+    }
+  });
 });
 
-// Function used by c++ to get the size of the html canvas
-EM_JS(int, canvas_get_height, (), {
-  return Module.canvas.height;
-});
+std::size_t State::serialize(std::byte **res){
+  this->buffer.clear();
 
-// Function called by javascript
-EM_JS(void, resizeCanvas, (), {
-  js_resizeCanvas();
-});
+  this->appendBuffer(this->materials.size());
+  this->appendBuffer(this->machines.size());
 
-void on_size_changed()
-{
-  glfwSetWindowSize(g_window, g_width, g_height);
+  for(Material m : this->materials){
+    std::string temp{m.name};
+    for(char c : temp){
+      this->buffer.push_back((std::byte)c);
+    }
+    this->buffer.push_back((std::byte)'\0');
+    this->appendBuffer(m.energy);
+  }
 
-  ImGui::SetCurrentContext(ImGui::GetCurrentContext());
+  for(Machine m : this->machines){
+    std::string temp{m.name};
+    for(char c : temp){
+      this->buffer.push_back((std::byte)c);
+    }
+    this->buffer.push_back((std::byte)'\0');
+    this->appendBuffer(m.tiers.size());
+    for(Machine::Tier t : m.tiers){
+      this->appendBuffer(t);
+    }
+  }
+
+  *res = this->buffer.data();
+  return this->buffer.size();
+}
+template <class T>
+void State::appendBuffer(const T obj){
+  const std::byte *const o = (const std::byte *const)&obj;
+  for(int i=0;i<sizeof(T);++i){
+    this->buffer.push_back(o[i]);
+  }
 }
 
-std::vector<Material> materials;
-
-void loop()
-{
-  int width = canvas_get_width();
-  int height = canvas_get_height();
-
-  if (width != g_width || height != g_height)
-  {
-    g_width = width;
-    g_height = height;
-    on_size_changed();
+void State::deserialize(deserializer d){
+  this->materials.clear();
+  this->machines.clear();
+  
+  std::size_t matLength;// = d.get<std::size_t>();
+  std::size_t macLength;// = d.get<std::size_t>();
+  d >> matLength >> macLength;
+  
+  for(std::size_t i=0;i<matLength;++i){
+    std::string str = std::string((char*)d.peek());
+    d.seek(str.length()+1);
+    std::cout << i << " : " << str << " : " << str.length() << std::endl;
+    float energy;
+    d >> energy;
+    this->materials.push_back({i,"",energy});
+    Material &m = *(this->materials.end()-1);
+    memcpy(m.name,str.c_str(),str.size()+1);
   }
-
-  glfwPollEvents();
-
-  ImGui_ImplOpenGL3_NewFrame();
-  ImGui_ImplGlfw_NewFrame();
-  ImGui::NewFrame();
-
-  ImGui::Begin("Materials");
-  for(int i=0;i<materials.size();++i){
-    materials.at(i).render("test"+std::to_string(i));
+  for(std::size_t i=0;i<macLength;++i){
+    std::string str = std::string((char*)d.peek());
+    d.seek(str.length()+1);
+    this->machines.push_back({i});
+    Machine &m = *(this->machines.end()-1);
+    memcpy(m.name,str.c_str(),str.size()+1);
+    std::size_t tierCount;
+    d >> tierCount;
+    Machine::Tier tier;
+    for(int i=0;i<tierCount;++i){
+      d >> tier;
+      m.tiers.push_back(tier);
+    }
   }
-  if(ImGui::Button("Add Material")){
+}
 
-    materials.push_back({"hello"});
+EMSCRIPTEN_KEEPALIVE
+extern "C" void C_updateState(std::byte *data, std::size_t length){
+  state.deserialize({0,data,length});
+}
+
+void app(){
+  ImGui::Begin("Elements Menu", nullptr, ImGuiWindowFlags_MenuBar);
+  if(ImGui::BeginMenuBar()) {
+    if(ImGui::MenuItem("Materials")){
+      selectedMenu = MENU::MATERIAL;
+    }
+    if(ImGui::MenuItem("Machines")){
+      selectedMenu = MENU::MACHINE;
+    }
+    if(ImGui::MenuItem("Recipes")){
+      selectedMenu = MENU::RECIPE;
+    }
+    if(ImGui::MenuItem("Processes")){
+      selectedMenu = MENU::PROCESS;
+    }
+    if(ImGui::MenuItem("System")){
+      selectedMenu = MENU::SYSTEM;
+    }
+    if(ImGui::BeginMenu("File")){
+      if(ImGui::MenuItem("Save")){
+        std::byte *ptr;
+        std::size_t len = state.serialize(&ptr);
+        const char *fName = "test.txt";
+        JS_downloadFile(ptr,len,fName);
+      }
+      if(ImGui::MenuItem("Load")){
+        JS_uploadFile();
+      }
+      ImGui::EndMenu();
+    }
+    ImGui::EndMenuBar();
+  }
+  switch(selectedMenu){
+    case MENU::MATERIAL:{
+      materialsMenu(state);
+    }break;
+    case MENU::MACHINE:{
+      machinesMenu(state);
+    }break;
+    default:{
+
+    }
   }
   ImGui::End();
-  ImGui::Render();
-
-  int display_w, display_h;
-  glfwMakeContextCurrent(g_window);
-  glfwGetFramebufferSize(g_window, &display_w, &display_h);
-  glViewport(0, 0, display_w, display_h);
-  glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
-  glClear(GL_COLOR_BUFFER_BIT);
-
-  ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-  glfwMakeContextCurrent(g_window);
-}
-
-
-int init_gl()
-{
-  if( !glfwInit() )
-  {
-      fprintf( stderr, "Failed to initialize GLFW\n" );
-      return 1;
-  }
-
-  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE); // We don't want the old OpenGL
-
-  // Open a window and create its OpenGL context
-  int canvasWidth = g_width;
-  int canvasHeight = g_height;
-  g_window = glfwCreateWindow(canvasWidth, canvasHeight, "WebGui Demo", NULL, NULL);
-  if( g_window == NULL )
-  {
-      fprintf( stderr, "Failed to open GLFW window.\n" );
-      glfwTerminate();
-      return -1;
-  }
-  glfwMakeContextCurrent(g_window); // Initialize GLEW
-
-  return 0;
-}
-
-
-int init_imgui()
-{
-  // Setup Dear ImGui binding
-  IMGUI_CHECKVERSION();
-  ImGui::CreateContext();
-  ImGui_ImplGlfw_InitForOpenGL(g_window, true);
-  ImGui_ImplOpenGL3_Init();
-
-  // Setup style
-  ImGui::StyleColorsDark();
-
-  ImGuiIO& io = ImGui::GetIO();
-
-  // Load Fonts
-  /*io.Fonts->AddFontFromFileTTF("data/xkcd-script.ttf", 23.0f);
-  io.Fonts->AddFontFromFileTTF("data/xkcd-script.ttf", 18.0f);
-  io.Fonts->AddFontFromFileTTF("data/xkcd-script.ttf", 26.0f);
-  io.Fonts->AddFontFromFileTTF("data/xkcd-script.ttf", 32.0f);
-  io.Fonts->AddFontDefault();*/
-
-  resizeCanvas();
-
-  return 0;
-}
-
-
-int init()
-{
-  init_gl();
-  init_imgui();
-  return 0;
-}
-
-
-void quit()
-{
-  glfwTerminate();
-}
-
-
-extern "C" int main(int argc, char** argv)
-{
-  g_width = canvas_get_width();
-  g_height = canvas_get_height();
-  if (init() != 0) return 1;
-
-  #ifdef __EMSCRIPTEN__
-  emscripten_set_main_loop(loop, 0, 1);
-  #endif
-
-  quit();
-
-  return 0;
 }
